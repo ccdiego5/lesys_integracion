@@ -1,5 +1,8 @@
 # LEsys — Guía de Integración Completa
 
+## Documentacion Oficial:
+https://developerlesys.serdimpre.com/
+
 Guía universal para integrar cualquier sistema con la API de LEsys (Serdimpre).
 Cubre el flujo completo: autenticación, consulta de existencia, creación de entidades
 y envío del documento fiscal.
