@@ -4,7 +4,10 @@ Guía universal para integrar cualquier sistema con la API de LEsys (Serdimpre).
 Cubre el flujo completo: autenticación, consulta de existencia, creación de entidades
 y envío del documento fiscal.
 
-> **Referencia oficial:** [developerlesys.serdimpre.com](https://developerlesys.serdimpre.com)
+> **Documentación oficial completa:** [developerlesys.serdimpre.com](https://developerlesys.serdimpre.com)
+> Esta guía es un resumen práctico orientado a la integración paso a paso. Para el esquema
+> OpenAPI completo, campos opcionales avanzados y notas de releases, consultar siempre la
+> documentación oficial en el enlace anterior.
 
 ---
 
@@ -464,10 +467,49 @@ ImpuestoAdicional[].MontoImpuestoAdicional = IGTF (en Bs)
 ImpuestoAdicional[].MontoImpuestoAdicionalEnMoneda = IGTF en USD
 ```
 
+### Pago en bolívares (VES) — sin IGTF
+
+Cuando el cobro es en **bolívares por transferencia bancaria**, el bloque `Pagos` cambia:
+
+```json
+"Pagos": [
+  {
+    "Id": 0,
+    "Referencia": "123234567",
+    "FechaPago": "2026-05-25",
+    "MetodoPago": "P05",
+    "Moneda": "BS",
+    "MontoEnBs": 17570.87,
+    "MontoEnMoneda": 17570.87,
+    "BancoOrigen": "",
+    "IdCuentaBancaria": "B0001",
+    "PuntoDeVenta": 0
+  }
+],
+"ImpuestoAdicional": []
+```
+
+Diferencias clave respecto al cobro en divisas:
+
+| Campo | Divisas (USD) | Bolívares (VES) |
+|---|---|---|
+| `MetodoPago` | `P02` (Efectivo divisas) | `P05` (Transferencia bancaria) |
+| `Moneda` | `USD` | `BS` |
+| `MontoEnBs` | monto USD × tasa | monto VES directo |
+| `MontoEnMoneda` | monto en USD | mismo valor que `MontoEnBs` |
+| `BancoOrigen` | `""` | `""` (LEsys valida su propio catálogo) |
+| `IdCuentaBancaria` | `""` | código de la cuenta (`B0001`) |
+| `ImpuestoAdicional` | declarar IGTF (3 %) | `[]` (sin IGTF) |
+
+> `BancoOrigen` va vacío porque LEsys valida ese campo contra su propio catálogo de bancos. `IdCuentaBancaria` es suficiente para identificar la cuenta destino.
+
+---
+
 ### `MetodoPago` y `Moneda` — siempre códigos, nunca nombres
 | ❌ Incorrecto | ✅ Correcto |
 |---|---|
 | `"MetodoPago": "Efectivo divisas"` | `"MetodoPago": "P02"` |
+| `"MetodoPago": "Transferencia bancaria"` | `"MetodoPago": "P05"` |
 | `"Moneda": "US Dollar"` | `"Moneda": "USD"` |
 | `"Moneda": "Bolívar"` | `"Moneda": "BS"` |
 
@@ -488,6 +530,180 @@ códigos podrían cambiar: siempre consultar el catálogo antes de enviar.
 
 ---
 
+## Paso 6 — Cuentas bancarias de la empresa (`cuenta_bancaria`)
+
+Las cuentas bancarias de la empresa en LEsys se usan como destino de pagos por **transferencia en Bs.** (`IdCuentaBancaria` en `Pagos[]`). El código asignado por LEsys (ej. `B0001`) debe guardarse en Qeza junto al método de pago correspondiente.
+
+### 6.1 Listar cuentas activas
+
+```bash
+GET /api/lesys/cuenta_bancaria/activa
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "value": [
+    {
+      "Codigo": "B0001",
+      "TipoPersona": "V",
+      "Identificacion": "17810359",
+      "Nombre": "DIEGO CARDENAS",
+      "Banco": "Banco de Venezuela S.A.C.A. Banco Universal",
+      "NumeroCuenta": "01020000000000000000",
+      "TipoCambio": "Nacional",
+      "Telefono": "4126660400",
+      "Estado": 1
+    }
+  ]
+}
+```
+
+> `Codigo` (ej. `"B0001"`) es el valor que va en `Pagos[].IdCuentaBancaria` del documento pendiente.
+
+---
+
+### 6.2 Obtener cuenta por código
+
+```bash
+GET /api/lesys/cuenta_bancaria/por_codigo?codigo=B0001
+```
+
+---
+
+### 6.3 Crear cuenta bancaria
+
+```bash
+POST /api/lesys/cuenta_bancaria
+```
+
+**Body:**
+```json
+{
+  "TipoPersona": "V",
+  "Identificacion": "17810359",
+  "Nombre": "DIEGO CARDENAS",
+  "Banco": "Banco de Venezuela S.A.C.A. Banco Universal",
+  "NumeroCuenta": "01020000000000000000",
+  "TipoCambio": "Nacional",
+  "Prefijo": "+58",
+  "Telefono": "4126660400"
+}
+```
+
+> `NumeroCuenta` va **sin guiones** (20 dígitos exactos). El campo `TipoCambio` acepta `"Nacional"` (cuentas VES) o `"Internacional"`.
+
+---
+
+### 6.4 Actualizar cuenta
+
+```bash
+PUT /api/lesys/cuenta_bancaria
+```
+Mismo body que POST más el campo `"Codigo": "B0001"`.
+
+---
+
+### 6.5 Cambiar estado
+
+```bash
+PATCH /api/lesys/cuenta_bancaria/estado
+```
+
+**Body:**
+```json
+{ "Codigo": "B0001", "Estado": 0 }
+```
+
+---
+
+### Uso en `documento_pendiente` — pago VES por transferencia
+
+Para un cobro en **bolívares** (transferencia bancaria), el bloque `Pagos` es:
+
+```json
+"Pagos": [
+  {
+    "Id": 0,
+    "Referencia": "00000015",
+    "FechaPago": "2026-05-25",
+    "MetodoPago": "P05",
+    "Moneda": "BS",
+    "MontoEnBs": 18461.56,
+    "MontoEnMoneda": 18461.56,
+    "BancoOrigen": "Banesco, Banco Universal S.A.C.A.",
+    "IdCuentaBancaria": "B0001",
+    "PuntoDeVenta": 0
+  }
+]
+```
+
+> - `MetodoPago: "P05"` = Transferencia bancaria (del catálogo `GET /metodo_pago/todos`).
+> - `Moneda: "BS"` = Bolívar (del catálogo `GET /moneda`).
+> - `MontoEnBs == MontoEnMoneda` porque ya es la moneda base.
+> - **Sin `ImpuestoAdicional`** — el IGTF solo aplica en pagos con divisas extranjeras.
+> - `BancoOrigen` = banco del cliente que realizó la transferencia (informativo).
+> - `IdCuentaBancaria` = código LEsys de la cuenta destino de la empresa (`B0001`).
+
+---
+
+## Qeza — Integración automática de métodos de pago con LEsys
+
+### Cómo funciona el flujo en Qeza
+
+Qeza gestiona los métodos de pago en **Parámetros → Métodos de Pago**. Cuando un operador registra un cobro en Caja y el método es de tipo VES (bolívares por transferencia), el sistema:
+
+1. Lee el `PaymentMethod` asociado al cobro.
+2. Verifica si ya tiene un `lesys_cuenta_bancaria_id` (caché en BD). Si lo tiene, lo usa directamente (sin llamar a la API).
+3. Si no tiene código → llama a `GET /cuenta_bancaria/activa` y busca si ya existe en LEsys por banco + identificación.
+4. Si existe en LEsys → guarda el código (`B0001`) en BD y lo usa.
+5. Si no existe → llama a `POST /cuenta_bancaria` para crearla y guarda el código devuelto.
+6. Arma el `documento_pendiente` con `IdCuentaBancaria = "B0001"`, `Moneda = "BS"`, `MetodoPago = "P05"` y **sin `ImpuestoAdicional`**.
+
+Todo este proceso es transparente: el operador solo selecciona el método de pago y el monto.
+
+---
+
+### Campos obligatorios en el PaymentMethod para sincronizar con LEsys
+
+Cuando el método de pago es **Tipo = Banco/Transferencia + Moneda = VES**, los siguientes campos alimentan el POST a `/cuenta_bancaria`. Si falta alguno, la sincronización falla silenciosamente y `IdCuentaBancaria` queda vacío.
+
+| Campo en Qeza | Label en UI | Campo LEsys | Notas |
+|---|---|---|---|
+| `holder_name` | Titular | `Nombre` | Obligatorio. Se envía en mayúsculas. |
+| `bank_name` | Banco (select) | `Banco` | Obligatorio. Nombre exacto SUDEBAN. |
+| `holder_id` | Cédula/RIF | `TipoPersona` + `Identificacion` | Formato `V-17810359`. El prefijo (V/J/E/P) define `TipoPersona`. |
+| `bank_account_num` | Número de cuenta | `NumeroCuenta` | Dígitos sin guiones, máx 20 chars. |
+| `phone` | Teléfono | `Telefono` | Dígitos venezolanos, 10 chars. |
+
+> Los campos `TipoCambio = "Nacional"` y `Prefijo = "+58"` son fijos en Qeza para cuentas VES.
+
+---
+
+### Matching para evitar duplicados en LEsys
+
+El gateway verifica si la cuenta ya existe **antes** de crearla. La coincidencia es por:
+
+- `CodigoBanco` (4 primeros dígitos del `NumeroCuenta`) coincide con el prefijo bancario del `bank_account_num`
+- `Identificacion` coincide con el número de cédula en `holder_id`
+
+Si ambos coinciden → reutiliza el código existente. Si no → crea una nueva.
+
+---
+
+### Mapeo método de pago Qeza → LEsys (pestaña VES en caja)
+
+| `type` en Qeza | `currency` | `MetodoPago` LEsys | `Moneda` LEsys | IGTF |
+|---|---|---|---|---|
+| `bank` | `VES` | `P05` (Transferencia bancaria) | `BS` | No |
+| `mobile` | `VES` | `P08` (Pago móvil) | `BS` | No |
+| `bank` | `USD` | `P02` (Efectivo divisas) | `USD` | Sí (3 %) |
+| `cash` | `USD` | `P02` (Efectivo divisas) | `USD` | Sí (3 %) |
+| `zelle` | `USD` | configurable en `services.lesys` | `USD` | Sí (3 %) |
+
+---
+
 ## Resumen del patrón GET → POST por entidad
 
 | Entidad | GET (verificar) | POST (crear) | Código retornado |
@@ -495,6 +711,7 @@ códigos podrían cambiar: siempre consultar el catálogo antes de enviar.
 | Cliente | `GET /cliente/por_identificacion?identificacion=` | `POST /cliente` | `CodigoCliente` en `value` |
 | Categoría | `GET /categoria_articulo?codigo=` | `POST /categoria_articulo` | `CodigoCategoria` en `value` |
 | Artículo | `GET /articulo/por_codigo?codigo=` | `POST /articulo` | `CodigoArticulo` en `value` |
+| Cuenta bancaria | `GET /cuenta_bancaria/por_codigo?codigo=` | `POST /cuenta_bancaria` | `Codigo` en `value` |
 | Métodos de pago | `GET /metodo_pago/todos` | — | `Codigo` en cada ítem |
 | Monedas | `GET /moneda` | — | `CodigoMoneda` en cada ítem |
 | Documento fiscal | — | `POST /documento_pendiente` | UUID del pendiente en `value` |
